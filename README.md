@@ -59,8 +59,8 @@ python scripts/get_data.py --dest data --tree geoid-flood-heldout --layer s1rtc 
 # preview a selection without downloading
 python scripts/get_data.py --list --layer s1grd s2l2a dem label
 
-# more shards in flight
-python scripts/get_data.py --dest data --layer s1grd --workers 8
+# more shards in flight (4 saturates the link; higher only raises peak disk and RAM)
+python scripts/get_data.py --dest data --layer s1grd --workers 4
 ```
 
 To inspect the data without a large download, `--sample` fetches two complete event-AoIs from

@@ -35,6 +35,11 @@ scripts = [
     "tqdm>=4.66,<5",
 ]
 
+# Test suite for the scripts above
+dev = [
+    "pytest>=8,<9",
+]
+
 [tool.setuptools]
 package-dir = { "" = "src" }
 
