@@ -19,6 +19,10 @@ The dataset itself, including full documentation of every modality, derived laye
 value, is on the Hugging Face Hub at
 [`links-ads/geoid-flood`](https://huggingface.co/datasets/links-ads/geoid-flood).
 
+![GEOID-Flood poster](docs/images/poster.png)
+
+*Poster presented at Terrabytes II - ECCV2026.*
+
 ![Representative GEOID-Flood tiles: pre- and post-event Sentinel-1 GRD and RTC, pre-event Sentinel-2 RGB, GLO-30 DEM, and the three-class label, for three events](docs/images/modality_samples.png)
 
 *Three GEOID-Flood events, all layers of a tile side by side. Flooded water is cyan, permanent
