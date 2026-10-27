@@ -149,6 +149,32 @@ def test_extract_workers_defaults_to_workers(get_data, monkeypatch, hub, tmp_pat
     assert seen["pools"] == [3, 3]
 
 
+def test_every_hub_call_pins_the_revision(get_data, monkeypatch, hub, tmp_path):
+    seen = []
+
+    def spy(**kw):
+        seen.append(kw.get("revision"))
+        return hub(**kw)
+
+    _run(get_data, monkeypatch, spy, tmp_path / "data", ["--revision", "v9.9"])
+    assert seen and set(seen) == {"v9.9"}
+
+
+def test_resuming_another_revision_is_refused(get_data, monkeypatch, hub, tmp_path):
+    dest = tmp_path / "data"
+    _run(get_data, monkeypatch, hub, dest, ["--revision", "v1.0"])
+    with pytest.raises(SystemExit, match="holds GEOID-Flood v1.0, not v1.1"):
+        _run(get_data, monkeypatch, hub, dest, ["--revision", "v1.1"])
+
+
+def test_state_without_revision_is_read_as_v1_0(get_data, tmp_path):
+    """Downloads made before revisions were recorded all came from v1.0."""
+    (tmp_path / get_data.STATE).write_text("some/shard.tar\n")
+    get_data.check_revision(tmp_path, "v1.0")
+    with pytest.raises(SystemExit):
+        get_data.check_revision(tmp_path, "v1.1")
+
+
 def test_member_escaping_destination_is_rejected(get_data, tmp_path):
     """The traversal guard must survive the Windows-separator fix."""
     root = tmp_path / "out"

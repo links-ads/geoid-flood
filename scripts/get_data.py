@@ -28,12 +28,14 @@ else:
     load_dotenv()
 
 REPO = "links-ads/geoid-flood"
+REVISION = "v1.0"  # dataset tag this code release reads; bump with each dataset release
 TREES = ("geoid-flood", "geoid-flood-heldout")
 LAYERS = ("s1grd", "s1rtc", "s2l2a", "dem", "label", "cloudmask", "floodmask", "permwater", "validity")
 SPLITS = ("train", "val", "test")
 METADATA = ("data_tiles_s256_st128.csv", "tile_catalog.parquet")
 STAGING = ".geoid_flood_staging"
 STATE = ".geoid_flood_done"
+STATE_REVISION = ".geoid_flood_revision"
 
 SHARD_RE = re.compile(r"^(?P<tree>[^/]+)/shards/(?P<split>[^/]+)/(?P<layer>[^/]+)/[^/]+\.tar$")
 
@@ -60,10 +62,26 @@ def select_shards(index: dict, trees, splits, layers) -> list[dict]:
     return out
 
 
-def fetch_shard(repo: str, path: str, staging: Path, token: str | None) -> Path:
+def fetch_shard(repo: str, path: str, revision: str, staging: Path, token: str | None) -> Path:
     """Pull one shard to staging over the Xet chunk protocol."""
-    return Path(hf_hub_download(repo_id=repo, filename=path, repo_type="dataset",
+    return Path(hf_hub_download(repo_id=repo, filename=path, repo_type="dataset", revision=revision,
                                 local_dir=str(staging), token=token))
+
+
+def check_revision(dest: Path, revision: str) -> None:
+    """Refuse to resume a download of another dataset revision: shard names repeat across versions."""
+    marker = dest / STATE_REVISION
+    if marker.exists():
+        recorded = marker.read_text().strip()
+    elif (dest / STATE).exists():
+        recorded = "v1.0"  # state files written before revisions were recorded are all v1.0
+    else:
+        marker.write_text(revision + "\n")
+        return
+    if recorded != revision:
+        sys.exit(f"{dest} holds GEOID-Flood {recorded}, not {revision}. "
+                 f"Download into a new --dest, or pass --revision {recorded} to resume.")
+    marker.write_text(revision + "\n")
 
 
 def verify_shard(tar_path: Path, expect_sha: str | None) -> None:
@@ -93,6 +111,8 @@ def main() -> None:
         description="Download GEOID-Flood from the Hugging Face Hub and unpack it to the expected layout"
     )
     ap.add_argument("--repo", default=REPO)
+    ap.add_argument("--revision", default=REVISION,
+                    help=f"dataset version tag, branch or commit (default {REVISION})")
     ap.add_argument("--dest", default="data", type=Path, help="parent dir; trees are created under it")
     ap.add_argument("--tree", nargs="+", choices=TREES, default=list(TREES))
     ap.add_argument("--split", nargs="+", choices=SPLITS, default=list(SPLITS))
@@ -120,7 +140,8 @@ def main() -> None:
         from huggingface_hub import snapshot_download
 
         tmp = snapshot_download(
-            repo_id=args.repo, repo_type="dataset", allow_patterns=["sample/*"], token=args.token
+            repo_id=args.repo, repo_type="dataset", revision=args.revision,
+            allow_patterns=["sample/*"], token=args.token,
         )
         root = Path(tmp) / "sample"
         for src in root.rglob("*"):
@@ -134,14 +155,15 @@ def main() -> None:
         return
 
     index_path = hf_hub_download(
-        repo_id=args.repo, filename="shard_index.json.gz", repo_type="dataset", token=args.token
+        repo_id=args.repo, filename="shard_index.json.gz", repo_type="dataset",
+        revision=args.revision, token=args.token,
     )
     with gzip.open(index_path, "rt") as fh:
         index = json.load(fh)
 
     selected = select_shards(index, args.tree, args.split, args.layer)
     total = sum(s["size"] for s in selected)
-    print(f"{len(selected)} shards, {total/1e9:.1f} GB")
+    print(f"GEOID-Flood {args.revision}: {len(selected)} shards, {total/1e9:.1f} GB")
     if args.list:
         by = {}
         for s in selected:
@@ -155,6 +177,7 @@ def main() -> None:
         return
 
     args.dest.mkdir(parents=True, exist_ok=True)
+    check_revision(args.dest, args.revision)
     state = args.dest / STATE
     done = set(state.read_text().split()) if state.exists() else set()
     todo = [s for s in selected if s["path"] not in done]
@@ -173,7 +196,7 @@ def main() -> None:
         for name in METADATA:
             p = hf_hub_download(
                 repo_id=args.repo, filename=f"{tree}/{name}", repo_type="dataset",
-                local_dir=args.dest, token=args.token,
+                revision=args.revision, local_dir=args.dest, token=args.token,
             )
             print(f"metadata {p}")
 
@@ -211,7 +234,7 @@ def main() -> None:
 
     def download_shard(shard: dict) -> Path:
         """Download and checksum a shard before it is eligible for extraction."""
-        tar = fetch_shard(args.repo, shard["path"], staging, args.token)
+        tar = fetch_shard(args.repo, shard["path"], args.revision, staging, args.token)
         try:
             verify_shard(tar, shard.get("sha256"))
         except BaseException:

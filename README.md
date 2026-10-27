@@ -63,6 +63,9 @@ python scripts/get_data.py --dest data --tree geoid-flood-heldout --layer s1rtc 
 # preview a selection without downloading
 python scripts/get_data.py --list --layer s1grd s2l2a dem label
 
+# another dataset version (default: the one this code release was built for)
+python scripts/get_data.py --dest data-v1.0 --revision v1.0
+
 # more shards in flight (4 saturates the link; higher only raises peak disk and RAM)
 python scripts/get_data.py --dest data --layer s1grd --workers 4
 ```
