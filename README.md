@@ -8,7 +8,7 @@
 
 GEOID-Flood is a large-scale, multi-modal benchmark for flood segmentation built from
 Copernicus Emergency Management Service (CEMS) Rapid Mapping activations. It spans 219 flood
-events across 65 countries acquired between 2016 and 2026, decomposed into 14,282 tiles of
+events across 65 countries acquired between 2016 and 2026, decomposed into 12,236 tiles of
 1024x1024 pixels. Each tile provides co-registered Sentinel-1 GRD and RTC (pre- and
 post-event, VV/VH), a pre-event Sentinel-2 L2A composite, and a Copernicus GLO-30 DEM, all at
 10 m resolution, together with manually validated three-class labels (background, permanent
@@ -51,13 +51,13 @@ documents every layer and the label encoding.
 ```bash
 uv sync --extra scripts
 
-# everything (~586 GB)
+# everything (~329 GB)
 python scripts/get_data.py --dest data
 
-# Just S1GRD data (~205 GB)
+# Just S1GRD data (~91 GB)
 python scripts/get_data.py --dest data --layer s1grd label
 
-# only the held-out evaluation set used by the S1-RTC configs (~20 GB)
+# only the held-out evaluation set used by the S1-RTC configs (~10 GB)
 python scripts/get_data.py --dest data --tree geoid-flood-heldout --layer s1rtc label
 
 # preview a selection without downloading
@@ -72,7 +72,7 @@ python scripts/get_data.py --dest data --layer s1grd --workers 4
 
 To inspect the data without a large download, `--sample` fetches two complete event-AoIs from
 activation EMSR712, with all nine layers for all
-47 tiles, ~2.9 GB, plus a matching metadata file:
+47 tiles, ~1.3 GB, plus a matching metadata file:
 
 ```bash
 python scripts/get_data.py --sample --dest data
@@ -104,7 +104,7 @@ Both trees carry the same two metadata files at their root:
 | File | Role |
 |---|---|
 | `data_tiles_s256_st128.csv` | **The only metadata the dataloader reads.** One row per 256x256 chip per modality, enumerated at stride 128 for train and 256 for val/test. [Re-tiling](#re-tiling) below rebuilds it at any size. |
-| `tile_catalog.parquet` | Inventory of the 1024x1024 tiles: geometry and UTM CRS, pre/post delineation times, `is_valid`, `invalid_pixel_frac`, countries and `split`. **`is_valid AND invalid_pixel_frac <= 0.95` is the paper's tile selection**, it yields 12,853 tiles here (8,938 / 1,241 / 2,674) and 1,429 in the held-out tree |
+| `tile_catalog.parquet` | Inventory of the 1024x1024 tiles: geometry and UTM CRS, pre/post delineation times, `is_valid`, `invalid_pixel_frac`, countries and `split`. Every row is a shipped tile, 10,935 here (7,496 / 1,022 / 2,417) and 1,301 in the held-out tree |
 
 ### Re-tiling
 
@@ -137,9 +137,9 @@ terratorch fit --config <cfg> --data.init_args.metadata_filename data_tiles_s512
 
 Two things to know:
 
-- **Which tiles are selected is the paper's rule.** `--valid-only` (default on) and
-  `--max-invalid-frac` (default `0.95`) are the paper's two criteria, so a default run covers the
-  12,853 / 1,429 tiles it reports. `--no-valid-only --max-invalid-frac 1.0` visits the whole catalog.
+- **Which tiles are selected.** `--valid-only` (default on) and `--max-invalid-frac` (default
+  `0.95`) keep every tile of the v1.1 catalog, 10,935 / 1,301. `--no-valid-only
+  --max-invalid-frac 1.0` visits the whole catalog.
 - **Non-overlapping evaluation is preserved.** `--stride` applies to train only; val and test
   use the tile size unless you override `--eval-stride`.
 
