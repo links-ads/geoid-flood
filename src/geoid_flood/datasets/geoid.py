@@ -21,7 +21,7 @@ TIME_VARYING_MODALITIES = {"s1grd", "s1rtc", "s2l2a"}
 
 MODALITY_CHANNEL_COUNTS = {"s1grd": 2, "s1rtc": 2, "s2l2a": 12, "dem": 1}
 
-# On-disk S2 L2A band order (see tools/download_emsr/download_s2l2a_emsr_planetary.py)
+# On-disk S2 L2A band order: B01-B08, B8A, B09, B11, B12 (also the GeoTIFF band names)
 S2L2A_BAND_SELECT_INDICES = [1, 2, 3, 4, 5, 6, 7, 8, 10, 11]  # B02..B08, B8A, B11, B12 (skip B01, B09)
 
 # Channels per modality after band selection (e.g. s2l2a -> 10 TerraMind bands)

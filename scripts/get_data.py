@@ -28,7 +28,7 @@ else:
     load_dotenv()
 
 REPO = "links-ads/geoid-flood"
-REVISION = "v1.0"  # dataset tag this code release reads; bump with each dataset release
+REVISION = "v1.1"  # dataset tag this code release reads; bump with each dataset release
 TREES = ("geoid-flood", "geoid-flood-heldout")
 LAYERS = ("s1grd", "s1rtc", "s2l2a", "dem", "label", "cloudmask", "floodmask", "permwater", "validity")
 SPLITS = ("train", "val", "test")
