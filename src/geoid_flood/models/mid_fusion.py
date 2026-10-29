@@ -9,7 +9,7 @@ the ``fuse_paired`` data mode unchanged: the input is the channel-stacked
 ``[pre | post]`` image, split internally at ``pre_channels``.
 
 Heavy terratorch model symbols are imported lazily inside methods to avoid circular
-imports when this module is loaded during terratorch registry init (see necks.py).
+imports when this module is loaded during terratorch registry init.
 """
 
 import torch
