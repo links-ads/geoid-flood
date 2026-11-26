@@ -10,12 +10,13 @@ import shutil
 import sys
 import tarfile
 import threading
+import time
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 
-from huggingface_hub import hf_hub_download
-from huggingface_hub.utils import disable_progress_bars
+from huggingface_hub import hf_hub_download, hf_hub_url
+from huggingface_hub.utils import build_hf_headers, disable_progress_bars, get_session
 from tqdm import tqdm
 
 try:
@@ -40,17 +41,21 @@ STATE_REVISION = ".geoid_flood_revision"
 SHARD_RE = re.compile(r"^(?P<tree>[^/]+)/shards/(?P<split>[^/]+)/(?P<layer>[^/]+)/[^/]+\.tar$")
 
 
-def _safe_members(tar, root: Path):
+def _safe_dest(root: Path, name: str) -> Path:
     root = root.resolve()
+    dest = (root / name).resolve()
+    try:
+        dest.relative_to(root)
+    except ValueError:
+        raise ValueError(f"member escapes destination: {name}")
+    return dest
+
+
+def _safe_members(tar, root: Path):
     for info in tar:
         if not info.isreg():
             raise ValueError(f"unexpected member type in shard: {info.name}")
-        dest = (root / info.name).resolve()
-        try:
-            dest.relative_to(root)
-        except ValueError:
-            raise ValueError(f"member escapes destination: {info.name}")
-        yield info, dest
+        yield info, _safe_dest(root, info.name)
 
 
 def select_shards(index: dict, trees, splits, layers) -> list[dict]:
@@ -60,6 +65,103 @@ def select_shards(index: dict, trees, splits, layers) -> list[dict]:
         if m and m["tree"] in trees and m["split"] in splits and m["layer"] in layers:
             out.append(shard)
     return out
+
+
+def select_members(index: dict, trees, splits, layers, tiles) -> list[dict]:
+    out, found = [], set()
+    for shard in select_shards(index, trees, splits, layers):
+        if "member_index" not in shard:
+            sys.exit("this dataset revision has no per-file index, so --tile is unavailable; "
+                     "use --split/--layer to download whole shards")
+        if len(shard["members"]) != len(shard["member_index"]):
+            sys.exit(f"{shard['path']}: the index lists {len(shard['members'])} files "
+                     f"but {len(shard['member_index'])} byte ranges")
+        tree = SHARD_RE.match(shard["path"])["tree"]
+        for rel, (offset, size, sha256) in zip(shard["members"], shard["member_index"]):
+            name = rel.rsplit("/", 1)[-1]
+            tile = next((t for t in tiles if name.startswith(f"{t}_")), None)
+            if tile:
+                found.add(tile)
+                out.append({"shard": shard["path"], "tree": tree, "rel": rel,
+                            "offset": offset, "size": size, "sha256": sha256})
+    if found != set(tiles):
+        sys.exit(f"no files found for tile(s) {sorted(set(tiles) - found)} with the selected --tree/--split/--layer")
+    return out
+
+
+def fetch_range(repo: str, path: str, revision: str, offset: int, size: int, token: str | None) -> bytes:
+    last = offset + size - 1
+    headers = {**build_hf_headers(token=token), "Range": f"bytes={offset}-{last}", "Accept-Encoding": "identity"}
+    url = hf_hub_url(repo, path, repo_type="dataset", revision=revision)
+    chunks, received = [], 0
+    with get_session().stream("GET", url, headers=headers, follow_redirects=True) as response:
+        content_range = response.headers.get("Content-Range", "")
+        if response.status_code != 206 or not content_range.startswith(f"bytes {offset}-{last}/"):
+            raise ValueError(f"range request for {path} returned {response.status_code} "
+                             f"{content_range!r}, expected bytes {offset}-{last}")
+        for chunk in response.iter_bytes():
+            chunks.append(chunk)
+            received += len(chunk)
+            if received > size:
+                break
+    if received != size:
+        raise ValueError(f"range request for {path} returned {received} of {size} bytes")
+    return b"".join(chunks)
+
+
+def with_retries(call, attempts: int = 3):
+    for attempt in range(attempts):
+        try:
+            return call()
+        except Exception:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(2 ** attempt)
+
+
+def fetch_member(repo: str, member: dict, revision: str, dest: Path, token: str | None) -> None:
+    target = _safe_dest(dest / member["tree"], member["rel"])
+    if target.is_file() and target.stat().st_size == member["size"]:
+        return
+    data = with_retries(lambda: fetch_range(repo, member["shard"], revision, member["offset"], member["size"], token))
+    if hashlib.sha256(data).hexdigest() != member["sha256"]:
+        raise ValueError(f"sha256 mismatch for {member['rel']}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".part")
+    tmp.write_bytes(data)
+    tmp.replace(target)
+
+
+def download_members(args, index: dict) -> None:
+    members = select_members(index, args.tree, args.split, args.layer, args.tile)
+    total = sum(m["size"] for m in members)
+    print(f"GEOID-Flood {args.revision}: {len(members)} files from {len({m['shard'] for m in members})} "
+          f"shards, {total/1e6:.1f} MB")
+    if args.list:
+        for m in members:
+            print(f"  {m['tree']}/{m['rel']:70} {m['size']:>10,} B")
+        return
+    args.dest.mkdir(parents=True, exist_ok=True)
+    check_revision(args.dest, args.revision)
+    failures = []
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(fetch_member, args.repo, m, args.revision, args.dest, args.token): m
+                   for m in members}
+        try:
+            for future, member in futures.items():
+                try:
+                    future.result()
+                except Exception as exc:
+                    failures.append((member["rel"], f"{type(exc).__name__}: {exc}"))
+        except KeyboardInterrupt:
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+    if failures:
+        print(f"\n{len(failures)} file(s) failed; re-run to retry them:", file=sys.stderr)
+        for rel, err in failures:
+            print(f"  {rel}: {err}", file=sys.stderr)
+        sys.exit(1)
+    print(f"done -> {args.dest}/")
 
 
 def fetch_shard(repo: str, path: str, revision: str, staging: Path, token: str | None) -> Path:
@@ -117,8 +219,13 @@ def main() -> None:
     ap.add_argument("--tree", nargs="+", choices=TREES, default=list(TREES))
     ap.add_argument("--split", nargs="+", choices=SPLITS, default=list(SPLITS))
     ap.add_argument("--layer", nargs="+", choices=LAYERS, default=list(LAYERS))
+    ap.add_argument("--tile", nargs="+", metavar="TILE_ID",
+                    help="download only these tiles (e.g. EMSR720-4-1) by reading their byte ranges "
+                         "out of the shards, instead of whole shards. The metadata CSV/parquet "
+                         "are not fetched")
     ap.add_argument("--workers", type=int, default=4,
-                    help="shards downloaded concurrently (default 4); raises peak disk use")
+                    help="shards downloaded concurrently (default 4); raises peak disk use. "
+                         "With --tile: files fetched concurrently, no staging disk")
     ap.add_argument("--extract-workers", type=int, default=None,
                     help="shards extracted concurrently (default: same as --workers)")
     ap.add_argument("--force", action="store_true", help="skip the free-space preflight check")
@@ -160,6 +267,10 @@ def main() -> None:
     )
     with gzip.open(index_path, "rt") as fh:
         index = json.load(fh)
+
+    if args.tile:
+        download_members(args, index)
+        return
 
     selected = select_shards(index, args.tree, args.split, args.layer)
     total = sum(s["size"] for s in selected)
