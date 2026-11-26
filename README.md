@@ -70,6 +70,17 @@ python scripts/get_data.py --dest data-v1.0 --revision v1.0
 python scripts/get_data.py --dest data --layer s1grd --workers 4
 ```
 
+To fetch a few specific tiles without downloading whole shards, pass `--tile`. Each file is read by
+HTTP range request from its shard (a few MB per file instead of ~2 GB per S1-RTC shard) and checked
+against its SHA-256 from the shard index. Add `--list` to see the files and sizes first.
+`--tile` does not fetch `data_tiles_s256_st128.csv` or `tile_catalog.parquet` (the CSV is ~350 MB); the
+dataloader needs them, so get them separately with
+`hf download links-ads/geoid-flood geoid-flood/data_tiles_s256_st128.csv geoid-flood/tile_catalog.parquet --repo-type dataset --revision v1.1 --local-dir data`.
+
+```bash
+python scripts/get_data.py --dest data --tile EMSR720-4-1 EMSR411-1-4 --layer s1rtc label validity
+```
+
 To inspect the data without a large download, `--sample` fetches two complete event-AoIs from
 activation EMSR712, with all nine layers for all
 47 tiles, ~1.3 GB, plus a matching metadata file:
