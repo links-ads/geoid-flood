@@ -15,6 +15,7 @@ from collections import deque
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 
+import httpx
 from huggingface_hub import hf_hub_download, hf_hub_url
 from huggingface_hub.utils import build_hf_headers, disable_progress_bars, get_session
 from tqdm import tqdm
@@ -38,6 +39,8 @@ STAGING = ".geoid_flood_staging"
 STATE = ".geoid_flood_done"
 STATE_REVISION = ".geoid_flood_revision"
 
+RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+
 SHARD_RE = re.compile(r"^(?P<tree>[^/]+)/shards/(?P<split>[^/]+)/(?P<layer>[^/]+)/[^/]+\.tar$")
 
 
@@ -56,6 +59,10 @@ def _safe_members(tar, root: Path):
         if not info.isreg():
             raise ValueError(f"unexpected member type in shard: {info.name}")
         yield info, _safe_dest(root, info.name)
+
+
+class TransientRangeError(Exception):
+    pass
 
 
 def select_shards(index: dict, trees, splits, layers) -> list[dict]:
@@ -95,6 +102,8 @@ def fetch_range(repo: str, path: str, revision: str, offset: int, size: int, tok
     url = hf_hub_url(repo, path, repo_type="dataset", revision=revision)
     chunks, received = [], 0
     with get_session().stream("GET", url, headers=headers, follow_redirects=True) as response:
+        if response.status_code in RETRYABLE_STATUS:
+            raise TransientRangeError(f"range request for {path} returned {response.status_code}")
         content_range = response.headers.get("Content-Range", "")
         if response.status_code != 206 or not content_range.startswith(f"bytes {offset}-{last}/"):
             raise ValueError(f"range request for {path} returned {response.status_code} "
@@ -113,7 +122,7 @@ def with_retries(call, attempts: int = 3):
     for attempt in range(attempts):
         try:
             return call()
-        except Exception:
+        except (httpx.TransportError, TransientRangeError):
             if attempt == attempts - 1:
                 raise
             time.sleep(2 ** attempt)
@@ -236,6 +245,8 @@ def main() -> None:
     ap.add_argument("--token", default=None)
     args = ap.parse_args()
 
+    if args.sample and args.tile:
+        ap.error("--sample and --tile cannot be combined")
     if args.workers < 1:
         ap.error("--workers must be at least 1")
     if args.extract_workers is None:

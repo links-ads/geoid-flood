@@ -425,7 +425,7 @@ def test_transient_failures_are_retried_then_reported(get_data, monkeypatch, til
     def flaky(*args):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise ValueError("429")
+            raise get_data.TransientRangeError("429")
         return real(*args)
 
     monkeypatch.setattr(get_data, "fetch_range", flaky)
@@ -434,8 +434,34 @@ def test_transient_failures_are_retried_then_reported(get_data, monkeypatch, til
     assert calls["n"] == 2
 
     def always_unavailable(*args):
-        raise ValueError("503")
+        raise get_data.TransientRangeError("503")
 
     monkeypatch.setattr(get_data, "fetch_range", always_unavailable)
     with pytest.raises(SystemExit):
         _run_tiles(get_data, monkeypatch, tmp_path / "other", ["--tile", TILE_B])
+
+
+def test_permanent_errors_are_not_retried(get_data, monkeypatch, tile_hub, tmp_path):
+    calls = {"n": 0}
+
+    def forbidden(*args):
+        calls["n"] += 1
+        raise ValueError("403")
+
+    monkeypatch.setattr(get_data, "fetch_range", forbidden)
+    monkeypatch.setattr(get_data.time, "sleep", lambda s: pytest.fail("slept before a permanent error"))
+    with pytest.raises(SystemExit):
+        _run_tiles(get_data, monkeypatch, tmp_path / "data", ["--tile", TILE_B])
+    assert calls["n"] == 1
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
+def test_fetch_range_flags_throttling_and_server_errors_as_transient(get_data, monkeypatch, status):
+    with pytest.raises(get_data.TransientRangeError):
+        _range(get_data, monkeypatch, _Response(status, None, b""))
+
+
+def test_sample_and_tile_cannot_be_combined(get_data, monkeypatch, tmp_path):
+    with pytest.raises(SystemExit) as exit_info:
+        _run_tiles(get_data, monkeypatch, tmp_path / "data", ["--sample", "--tile", TILE_A])
+    assert exit_info.value.code == 2
